@@ -1,0 +1,53 @@
+# electron-builder 配置
+# 文档：https://www.electron.build/configuration
+
+appId: com.cnc.template-finder
+productName: CNC图纸智能匹配系统
+copyright: Copyright © 2026
+
+directories:
+  output: release
+
+# 关闭 asar：
+#  1) 后端通过 child_process 调用 powershell.exe -File <脚本路径>，
+#     PowerShell 是外部进程，无法读取 asar 内部的文件，脚本必须以真实文件存在；
+#  2) 后端使用 node:sqlite 与文件读写，关闭 asar 更可靠；
+#  3) 运行时后端实际使用的脚本为 server/dist/scripts/powermill.ps1
+#     （由 build:electron 的 copy-resources 复制，随 server/dist/** 打包）。
+asar: false
+
+# 应用入口由根 package.json 的 main 字段决定（electron/main.js）
+files:
+  - client/dist/**
+  - server/dist/**
+  - server/node_modules/**
+  - server/package.json
+  - electron/**
+  - package.json
+
+# 额外资源：把 PowerMill PowerShell 脚本额外暴露到 resources/scripts/
+# （后端运行时使用的是 server/dist/scripts/powermill.ps1；
+#   此处提供一个稳定可访问的副本，便于外部调用/排查）
+extraResources:
+  - from: server/src/scripts/powermill.ps1
+    to: scripts/powermill.ps1
+
+# Windows 安装包（NSIS）
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 如需自定义图标，放置 256x256 的 ICO 到 build/icon.ico 并取消下行注释：
+  # icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CNC图纸智能匹配系统
+
+# 不发布到外部更新源
+publish: null

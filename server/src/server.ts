@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 
 const { searchRoutes } = await import('./routes/search.js');
+const { powermillRoutes } = await import('./routes/powermill.js');
 
 const PORT = parseInt(process.env.MTF_PORT || '3100', 10);
 const UPLOAD_DIR = process.env.MTF_UPLOAD_DIR || './uploads';
@@ -30,6 +31,7 @@ await app.register(fastifyStatic, {
 
 // Routes
 await app.register(searchRoutes);
+await app.register(powermillRoutes);
 
 // Health check
 app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));

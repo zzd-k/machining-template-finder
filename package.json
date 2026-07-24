@@ -2,15 +2,23 @@
   "name": "machining-template-finder",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build:server": "cd server && npm run build",
     "build:client": "cd client && npm run build",
-    "build": "npm run build:server && npm run build:client"
+    "build": "npm run build:server && npm run build:client",
+    "build:electron": "tsc -p electron/tsconfig.json && node electron/scripts/copy-resources.js",
+    "dev:electron": "npm run build:server && npm run build:electron && concurrently -k -n VITE,ELECTRON \"npm:dev:client\" \"electron .\"",
+    "dist": "npm run build && npm run build:electron && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
-    "concurrently": "^9.2.0"
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.2.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.6.0"
   }
 }

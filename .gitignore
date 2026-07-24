@@ -15,6 +15,11 @@ dist/
 dist-ssr/
 *.tsbuildinfo
 
+# Electron build output
+electron/main.js
+electron/main.js.map
+release/
+
 # IDE
 .vscode/
 .idea/
