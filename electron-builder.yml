@@ -2,11 +2,11 @@
 # 文档：https://www.electron.build/configuration
 
 appId: com.cnc.template-finder
-productName: CNC图纸智能匹配系统
+productName: CNC-Template-Finder
 copyright: Copyright © 2026
 
 directories:
-  output: release
+  output: C:/Users/alex/mtf-build
 
 # 关闭 asar：
 #  1) 后端通过 child_process 调用 powershell.exe -File <脚本路径>，
@@ -35,9 +35,15 @@ extraResources:
 # Windows 安装包（NSIS）
 win:
   target:
-    - target: nsis
+    - target: portable
       arch:
         - x64
+    - target: dir
+      arch:
+        - x64
+  # 禁用代码签名，避免 signtool 干扰卸载器创建导致 NSIS 打包失败
+  signAndEditExecutable: false
+  forceCodeSigning: false
   # 如需自定义图标，放置 256x256 的 ICO 到 build/icon.ico 并取消下行注释：
   # icon: build/icon.ico
 
@@ -47,7 +53,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: CNC图纸智能匹配系统
+  shortcutName: CNC Template Finder
 
 # 不发布到外部更新源
 publish: null
