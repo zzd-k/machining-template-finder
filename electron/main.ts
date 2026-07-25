@@ -114,7 +114,7 @@ function startBackend(): boolean {
   backendProcess.on('exit', (code, signal) => {
     console.log(`[electron] 后端退出 code=${code} signal=${signal}`)
     backendProcess = null
-    if (!backendReady && !app.isQuitting) {
+    if (!backendReady && !(app as any).isQuitting) {
       dialog.showErrorBox(
         '后端启动失败',
         `后端进程异常退出（code=${code}）。\n请查看控制台日志排查原因。`,
@@ -213,7 +213,7 @@ function registerAppProtocol(): void {
         !!request.body
       if (hasBody) {
         // 转发请求体（multipart / JSON 等），流式透传
-        ;(init as any).body = request.body as BodyInit
+        ;(init as any).body = request.body as any
         ;(init as any).duplex = 'half'
       }
       try {

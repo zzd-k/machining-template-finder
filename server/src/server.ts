@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import multipart from '@fastify/multipart';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,11 @@ const app = Fastify({ logger: true });
 
 // CORS
 await app.register(cors, { origin: true });
+
+// Multipart support for file uploads
+await app.register(multipart, {
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
 
 // Static files for uploaded images
 await app.register(fastifyStatic, {
