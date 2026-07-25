@@ -1,9 +1,6 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import fs from 'fs';
-
-const API_KEY = process.env.MTF_SILICONFLOW_API_KEY!;
-const BASE_URL = process.env.MTF_SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1';
-const MODEL = process.env.MTF_EMBEDDING_MODEL || 'Qwen/Qwen3-VL-Embedding-8B';
+import { getConfig } from './config.js';
 
 /**
  * 将图片文件转为 base64
@@ -16,13 +13,17 @@ function imageToBase64(filePath: string): string {
 /**
  * 调用 SiliconFlow API 获取图片的向量嵌入
  * 支持 image URL 和 base64 格式
+ * API Key 从运行时配置读取（非环境变量常量）
  */
 export async function getImageEmbedding(imageInput: { url?: string; filePath?: string }): Promise<number[]> {
-  let input: string;
+  const config = getConfig();
+  if (!config.siliconflowApiKey) {
+    throw new Error('未配置 SiliconFlow API Key，请在设置中填写');
+  }
 
+  let input: string;
   if (imageInput.filePath) {
     const base64 = imageToBase64(imageInput.filePath);
-    // Detect mime type
     const ext = imageInput.filePath.split('.').pop()?.toLowerCase();
     const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
     input = `data:${mime};base64,${base64}`;
@@ -33,15 +34,15 @@ export async function getImageEmbedding(imageInput: { url?: string; filePath?: s
   }
 
   const response = await axios.post(
-    `${BASE_URL}/embeddings`,
+    `${config.siliconflowBaseUrl}/embeddings`,
     {
-      model: MODEL,
+      model: config.embeddingModel,
       input,
       encoding_format: 'float',
     },
     {
       headers: {
-        'Authorization': `Bearer ${API_KEY}`,
+        'Authorization': `Bearer ${config.siliconflowApiKey}`,
         'Content-Type': 'application/json',
       },
       timeout: 30000,

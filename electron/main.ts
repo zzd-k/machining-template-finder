@@ -94,6 +94,7 @@ function startBackend(): boolean {
     // 数据库 & 上传目录重定向到 userData（用户独立、可写）
     MTF_DB_PATH: path.join(userData, 'data', 'templates.db'),
     MTF_UPLOAD_DIR: path.join(userData, 'uploads'),
+    MTF_CONFIG_PATH: path.join(userData, 'data', 'config.json'),
   }
 
   console.log('[electron] 启动后端：', serverJs)

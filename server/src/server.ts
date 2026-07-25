@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // must be dynamically imported after this call (ESM static imports are hoisted).
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 
+const { configRoutes } = await import('./routes/config.js');
 const { searchRoutes } = await import('./routes/search.js');
 const { powermillRoutes } = await import('./routes/powermill.js');
 
@@ -35,7 +36,8 @@ await app.register(fastifyStatic, {
   prefix: '/uploads/',
 });
 
-// Routes
+// Routes (config first, so API key is available to other routes)
+await app.register(configRoutes);
 await app.register(searchRoutes);
 await app.register(powermillRoutes);
 

@@ -138,6 +138,10 @@ const searchResults = ref<SearchResult[]>([])
 const uploading = ref(false)
 const searching = ref(false)
 const recognizing = ref(false)
+const showSettings = ref(false)
+const settingsConfig = ref({ siliconflowApiKey: '', siliconflowBaseUrl: 'https://api.siliconflow.cn/v1', embeddingModel: 'Qwen/Qwen3-VL-Embedding-8B', configured: false })
+const settingsInput = ref({ siliconflowApiKey: '', siliconflowBaseUrl: 'https://api.siliconflow.cn/v1', embeddingModel: 'Qwen/Qwen3-VL-Embedding-8B' })
+const savingSettings = ref(false)
 const recognizeResult = ref<any>(null)
 const recognizeError = ref('')
 const uploadDesc = ref('')
@@ -229,9 +233,41 @@ async function globalRecognize() {
   }
 }
 
+async function fetchSettings() {
+  try {
+    const res = await fetch('/api/config')
+    const data = await res.json()
+    if (data.success) {
+      settingsConfig.value = data.config
+      settingsInput.value.siliconflowApiKey = ''
+      settingsInput.value.siliconflowBaseUrl = data.config.siliconflowBaseUrl
+      settingsInput.value.embeddingModel = data.config.embeddingModel
+    }
+  } catch {}
+}
+
+async function saveSettings() {
+  savingSettings.value = true
+  try {
+    const body: Record<string, string> = {}
+    if (settingsInput.value.siliconflowApiKey) body.siliconflowApiKey = settingsInput.value.siliconflowApiKey
+    if (settingsInput.value.siliconflowBaseUrl) body.siliconflowBaseUrl = settingsInput.value.siliconflowBaseUrl
+    if (settingsInput.value.embeddingModel) body.embeddingModel = settingsInput.value.embeddingModel
+    const res = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json()
+    if (data.success) {
+      settingsConfig.value = data.config
+      showSettings.value = false
+    }
+  } finally {
+    savingSettings.value = false
+  }
+}
+
 onMounted(() => {
   refreshPM()
   fetchDrawings()
+  fetchSettings()
 })
 
 onUnmounted(() => {
@@ -244,8 +280,46 @@ onUnmounted(() => {
     <header>
       <h1>CNC 图纸智能匹配系统</h1>
       <span class="badge" :class="statusBadge.class">{{ statusBadge.text }}</span>
+      <button class="btn-sm settings-btn" @click="showSettings = true">设置</button>
     </header>
 
+
+    <!-- ====== 设置弹窗 ====== -->
+    <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>API 配置</h2>
+          <button class="modal-close" @click="showSettings = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>SiliconFlow API Key</label>
+            <input v-model="settingsInput.siliconflowApiKey" type="password" :placeholder="settingsConfig.configured ? '已配置（输入新值可替换）' : '请输入 API Key'" />
+            <p class="form-hint">获取地址：https://cloud.siliconflow.cn</p>
+          </div>
+          <div class="form-group">
+            <label>API Base URL</label>
+            <input v-model="settingsInput.siliconflowBaseUrl" />
+          </div>
+          <div class="form-group">
+            <label>Embedding 模型</label>
+            <input v-model="settingsInput.embeddingModel" />
+          </div>
+          <div v-if="settingsConfig.configured" class="config-status ok">
+            当前状态：已配置 ({{ settingsConfig.siliconflowApiKey }})
+          </div>
+          <div v-else class="config-status warn">
+            当前状态：未配置，全局识别功能不可用
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showSettings = false">取消</button>
+          <button class="btn-save" :disabled="savingSettings" @click="saveSettings">
+            {{ savingSettings ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
     <main>
       <!-- ====== PowerMill 状态面板 ====== -->
       <section class="card pm-panel">
@@ -529,6 +603,24 @@ button:disabled { background: #ccc; cursor: not-allowed; }
 .match-info summary { font-size: 12px; color: #1565c0; cursor: pointer; }
 .params-pre { background: #fff; padding: 8px; border-radius: 4px; font-size: 11px; overflow-x: auto; }
 .btn-primary { background: #4CAF50; color: white; border-color: #4CAF50; }
+.settings-btn { margin-left: auto; }
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: white; border-radius: 10px; width: 480px; max-width: 90%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid #eee; }
+.modal-header h2 { margin: 0; font-size: 18px; }
+.modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0 8px; }
+.modal-body { padding: 20px; overflow-y: auto; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; color: #333; margin-bottom: 6px; font-weight: 600; }
+.form-group input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+.form-hint { font-size: 12px; color: #999; margin: 4px 0 0 0; }
+.config-status { padding: 10px; border-radius: 6px; font-size: 13px; margin-top: 8px; }
+.config-status.ok { background: #e8f5e9; color: #2e7d32; }
+.config-status.warn { background: #fff3e0; color: #e65100; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid #eee; }
+.btn-cancel { padding: 8px 20px; background: #f5f5f5; color: #666; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.btn-save { padding: 8px 20px; background: #1565c0; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.btn-save:disabled { background: #ccc; cursor: not-allowed; }
 .btn-primary:hover { background: #43a047; }
 @media (max-width: 768px) {
   .recognize-summary { grid-template-columns: repeat(2, 1fr); }
