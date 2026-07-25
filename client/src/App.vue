@@ -137,6 +137,9 @@ const drawings = ref<Drawing[]>([])
 const searchResults = ref<SearchResult[]>([])
 const uploading = ref(false)
 const searching = ref(false)
+const recognizing = ref(false)
+const recognizeResult = ref<any>(null)
+const recognizeError = ref('')
 const uploadDesc = ref('')
 const uploadMaterial = ref('')
 const uploadFile = ref<File | null>(null)
@@ -207,6 +210,25 @@ async function deleteDrawing(id: number) {
   await fetchDrawings()
 }
 
+async function globalRecognize() {
+  recognizing.value = true
+  recognizeError.value = ''
+  recognizeResult.value = null
+  try {
+    const res = await fetch('/api/powermill/global-recognize', { method: 'POST' })
+    const data = await res.json()
+    if (data.success) {
+      recognizeResult.value = data
+    } else {
+      recognizeError.value = data.error || '识别失败'
+    }
+  } catch (err) {
+    recognizeError.value = (err as Error).message
+  } finally {
+    recognizing.value = false
+  }
+}
+
 onMounted(() => {
   refreshPM()
   fetchDrawings()
@@ -237,6 +259,9 @@ onUnmounted(() => {
               {{ polling ? '停止轮询' : '自动刷新' }}
             </button>
             <button class="btn-sm" @click="takeScreenshot">截图</button>
+            <button class="btn-sm btn-primary" :disabled="recognizing || !pmConnected" @click="globalRecognize">
+              {{ recognizing ? '识别中...' : '全局识别' }}
+            </button>
           </div>
         </div>
 
@@ -347,6 +372,59 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <!-- ====== 全局识别结果 ====== -->
+      <section v-if="recognizeResult || recognizeError" class="card recognize-panel">
+        <h2>全局识别结果</h2>
+        <div v-if="recognizeError" class="error-msg">{{ recognizeError }}</div>
+        <div v-if="recognizeResult">
+          <div class="recognize-summary">
+            <div class="rec-stat">
+              <span class="rec-label">项目</span>
+              <span class="rec-value">{{ recognizeResult.project.name || '-' }}</span>
+            </div>
+            <div class="rec-stat">
+              <span class="rec-label">刀具数</span>
+              <span class="rec-value">{{ recognizeResult.project.toolCount }}</span>
+            </div>
+            <div class="rec-stat">
+              <span class="rec-label">刀路数</span>
+              <span class="rec-value">{{ recognizeResult.project.toolpathCount }}</span>
+            </div>
+            <div class="rec-stat">
+              <span class="rec-label">历史库</span>
+              <span class="rec-value">{{ recognizeResult.totalInDb }} 张</span>
+            </div>
+          </div>
+
+          <div v-if="recognizeResult.screenshot" class="recognize-screenshot">
+            <img :src="recognizeResult.screenshot.url" alt="PowerMill 视图截图" />
+          </div>
+
+          <div v-if="recognizeResult.matches.length" class="recognize-matches">
+            <h3>相似图纸匹配 (Top {{ recognizeResult.matches.length }})</h3>
+            <div v-for="m in recognizeResult.matches" :key="m.id" class="match-item"
+                 :class="{ 'match-best': m.similarity > 0.8 }">
+              <img :src="`/api/drawings/${m.id}/image`" class="match-thumb" />
+              <div class="match-info">
+                <p><strong>{{ m.filename }}</strong></p>
+                <p>相似度: <span class="sim-value">{{ (m.similarity * 100).toFixed(1) }}%</span></p>
+                <p v-if="m.material">材料: {{ m.material }}</p>
+                <p v-if="m.description">{{ m.description }}</p>
+                <details v-if="Object.keys(m.machining_params).length">
+                  <summary>推荐加工参数</summary>
+                  <pre class="params-pre">{{ JSON.stringify(m.machining_params, null, 2) }}</pre>
+                </details>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="empty-state">
+            <p>未找到相似图纸</p>
+            <p class="hint">请先在图库中上传历史图纸</p>
+          </div>
+        </div>
+      </section>
+
       <!-- ====== 图库 ====== -->
       <section class="card">
         <h2>图库 ({{ drawings.length }})</h2>
@@ -430,5 +508,29 @@ button:disabled { background: #ccc; cursor: not-allowed; }
 
 @media (max-width: 768px) {
   .pm-lists { grid-template-columns: 1fr; }
+}
+
+/* 全局识别 */
+.recognize-panel { border-top: 3px solid #4CAF50; }
+.recognize-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+.rec-stat { background: #f5f7fa; padding: 10px; border-radius: 6px; text-align: center; }
+.rec-label { display: block; font-size: 12px; color: #666; }
+.rec-value { display: block; font-size: 16px; font-weight: 600; color: #1a1a2e; margin-top: 4px; }
+.recognize-screenshot { margin-bottom: 15px; }
+.recognize-screenshot img { width: 100%; max-height: 300px; object-fit: contain; border-radius: 6px; border: 1px solid #eee; }
+.recognize-matches h3 { margin: 0 0 12px 0; font-size: 14px; color: #333; }
+.match-item { display: flex; gap: 12px; padding: 12px; background: #f9f9f9; border-radius: 6px; margin-bottom: 10px; }
+.match-item.match-best { background: #e8f5e9; border-left: 3px solid #4CAF50; }
+.match-thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; }
+.match-info { flex: 1; }
+.match-info p { margin: 2px 0; font-size: 13px; }
+.sim-value { font-weight: 600; color: #4CAF50; }
+.match-info details { margin-top: 8px; }
+.match-info summary { font-size: 12px; color: #1565c0; cursor: pointer; }
+.params-pre { background: #fff; padding: 8px; border-radius: 4px; font-size: 11px; overflow-x: auto; }
+.btn-primary { background: #4CAF50; color: white; border-color: #4CAF50; }
+.btn-primary:hover { background: #43a047; }
+@media (max-width: 768px) {
+  .recognize-summary { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

@@ -22,6 +22,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import powerMillService from '../services/powermill.js';
 import type { PMProjectChangeEvent } from '../services/powermill.js';
+import db from '../db/database.js';
+import { getImageEmbedding, cosineSimilarity } from '../services/embedding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -252,5 +254,109 @@ export async function powermillRoutes(fastify: FastifyInstance) {
         powerMillService.removeListener(eventTypes[i], handlers[i]);
       }
     });
+  });
+
+
+  /**
+   * POST /api/powermill/global-recognize
+   * 全局识别：导出当前视图截图，提取 embedding，搜索相似历史图纸
+   * 返回：当前项目信息 + 截图 + 相似匹配结果 + 推荐加工参数
+   */
+  fastify.post('/api/powermill/global-recognize', async (_request, reply) => {
+    try {
+      // 1. 检查 PowerMill 连接
+      const status = await powerMillService.getStatus();
+      if (!status.success) {
+        return reply.status(503).send({
+          success: false,
+          error: status.error || 'PowerMill 未连接，请确保已启动并打开项目',
+        });
+      }
+
+      // 2. 导出当前视图截图
+      const screenshotFile = `screenshot_${randomUUID()}.png`;
+      const screenshotPath = path.join(screenshotDir, screenshotFile);
+      const screenshotResult = await powerMillService.takeScreenshot(screenshotPath);
+
+      if (!screenshotResult.success) {
+        return reply.status(500).send({
+          success: false,
+          error: `截图失败: ${screenshotResult.error || '未知错误'}`,
+        });
+      }
+
+      // 3. 提取截图 embedding
+      let queryEmbedding: number[];
+      try {
+        queryEmbedding = await getImageEmbedding({ filePath: screenshotPath });
+      } catch (err) {
+        return reply.status(500).send({
+          success: false,
+          error: `图像特征提取失败: ${(err as Error).message}`,
+        });
+      }
+
+      // 4. 在数据库搜索相似图纸
+      const rows = db.prepare('SELECT * FROM drawings WHERE embedding IS NOT NULL').all() as Array<{
+        id: number;
+        filename: string;
+        original_path: string;
+        description: string;
+        material: string;
+        machining_params: string;
+        embedding: Uint8Array | Buffer;
+        embedding_dim: number;
+        created_at: string;
+      }>;
+
+      const results = rows.map((row) => {
+        const storedEmbedding = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding_dim);
+        const similarity = cosineSimilarity(queryEmbedding, Array.from(storedEmbedding));
+        return {
+          id: row.id,
+          filename: row.filename,
+          description: row.description,
+          material: row.material,
+          machining_params: JSON.parse(row.machining_params || '{}'),
+          similarity: Math.round(similarity * 10000) / 10000,
+          created_at: row.created_at,
+        };
+      });
+
+      results.sort((a: any, b: any) => b.similarity - a.similarity);
+      const topResults = results.slice(0, 5);
+
+      // 5. 获取当前项目刀具和刀路
+      const [tools, toolpaths] = await Promise.all([
+        powerMillService.getTools(),
+        powerMillService.getToolpaths(),
+      ]);
+
+      return reply.send({
+        success: true,
+        project: {
+          name: status.projectName,
+          path: status.projectPath,
+          units: status.units,
+          toolCount: status.toolCount,
+          toolpathCount: status.toolpathCount,
+          activeTool: status.activeTool,
+          activeToolpath: status.activeToolpath,
+        },
+        screenshot: {
+          url: `/uploads/screenshots/${screenshotFile}`,
+          size: screenshotResult.size,
+        },
+        currentTools: tools,
+        currentToolpaths: toolpaths,
+        matches: topResults,
+        totalInDb: rows.length,
+      });
+    } catch (err) {
+      return reply.status(500).send({
+        success: false,
+        error: `全局识别失败: ${(err as Error).message}`,
+      });
+    }
   });
 }
