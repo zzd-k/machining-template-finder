@@ -103,7 +103,7 @@ if ($null -eq $pm) {
         error   = '无法连接 PowerMill，请确保 PowerMill 已启动并已打开项目'
     }
     Write-Output ($result | ConvertTo-Json -Compress)
-    exit 1
+    exit 0
 }
 
 try {

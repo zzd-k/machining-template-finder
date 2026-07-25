@@ -122,26 +122,34 @@ function runPowerShellScript(
         encoding: 'utf8',
       },
       (error, stdout, stderr) => {
+        // 即使退出码非 0（如脚本内部 exit 1），PowerShell 也可能已输出 JSON。
+        // 优先解析 stdout 中的 JSON，提取脚本返回的结构化结果（含 success:false 的错误）。
+        const rawOut: string = stdout || (error as any)?.stdout || '';
+        const lines = rawOut.trim().split('\n').filter(l => l.trim().startsWith('{'));
+        const jsonLine = lines[lines.length - 1] || rawOut.trim();
+
+        if (jsonLine) {
+          try {
+            const result = JSON.parse(jsonLine);
+            resolve(result as PMRawResult);
+            return;
+          } catch {
+            // JSON 解析失败，继续走错误流程
+          }
+        }
+
         if (error) {
-          // 超时或进程错误
-          reject(new Error(`PowerShell 执行失败: ${error.message}`));
+          // 超时或进程错误，且无可解析的 JSON 输出
+          const stderrInfo = stderr ? `\nstderr: ${stderr.substring(0, 500)}` : '';
+          reject(new Error(`PowerShell 执行失败: ${error.message}${stderrInfo}`));
           return;
         }
 
-        // PowerShell 可能输出 BOM 或额外换行，取最后一行 JSON
-        const lines = stdout.trim().split('\n').filter(l => l.trim().startsWith('{'));
-        const jsonLine = lines[lines.length - 1] || stdout.trim();
-
-        try {
-          const result = JSON.parse(jsonLine);
-          resolve(result as PMRawResult);
-        } catch {
-          // JSON 解析失败，返回原始输出
-          resolve({
-            success: false,
-            error: `无法解析 PowerShell 输出: ${jsonLine.substring(0, 200)}`,
-          });
-        }
+        // 退出码为 0 但无 JSON 输出
+        resolve({
+          success: false,
+          error: `无法解析 PowerShell 输出: ${rawOut.substring(0, 200)}`,
+        });
       }
     );
   });
