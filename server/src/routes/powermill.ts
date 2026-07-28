@@ -41,14 +41,31 @@ export async function powermillRoutes(fastify: FastifyInstance) {
    * 获取 PowerMill 当前项目状态
    */
   fastify.get('/api/powermill/status', async (_request, reply) => {
+    // 1. Return fresh cache (<30s) to avoid slow PowerShell startup
+    const cached = powerMillService.getCachedStatus(30000);
+    if (cached) return reply.send(cached);
+    // 2. No cache - do live query (may be slow)
     try {
       const status = await powerMillService.getStatus();
       return reply.send(status);
     } catch (err) {
-      return reply.status(500).send({
-        success: false,
-        error: `获取状态失败: ${(err as Error).message}`,
-      });
+      // 3. Live query failed - return stale cache or error
+      const stale = powerMillService.getCachedStatusAny();
+      if (stale) return reply.send(stale);
+      return reply.status(500).send({ success: false, error: `获取状态失败: ${(err as Error).message}` });
+    }
+  });
+
+  /**
+   * POST /api/powermill/refresh
+   * Force refresh PowerMill status (ignore cache)
+   */
+  fastify.post('/api/powermill/refresh', async (_request, reply) => {
+    try {
+      const status = await powerMillService.getStatus();
+      return reply.send(status);
+    } catch (err) {
+      return reply.status(500).send({ success: false, error: (err as Error).message });
     }
   });
 
@@ -119,15 +136,15 @@ export async function powermillRoutes(fastify: FastifyInstance) {
   /**
    * POST /api/powermill/screenshot
    * 导出当前视图截图
-   * Body: { filename?: string }  可选自定义文件名
+   * Body: { filename?: string, view?: 'iso'|'front'|'top'|'left'|'right'|'back'|'bottom' }
    */
   fastify.post('/api/powermill/screenshot', async (request, reply) => {
     try {
-      const body = request.body as { filename?: string } | null;
+      const body = request.body as { filename?: string; view?: string } | null;
       const filename = body?.filename || `${randomUUID()}.png`;
       const outputPath = path.join(screenshotDir, filename);
 
-      const result = await powerMillService.takeScreenshot(outputPath);
+      const result = await powerMillService.takeScreenshot(outputPath, body?.view);
 
       if (result.success) {
         return reply.send({
@@ -135,6 +152,7 @@ export async function powermillRoutes(fastify: FastifyInstance) {
           filename,
           url: `/uploads/screenshots/${filename}`,
           size: result.size,
+          view: result.view,
         });
       } else {
         return reply.status(500).send(result);
@@ -165,6 +183,28 @@ export async function powermillRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: `执行命令失败: ${(err as Error).message}`,
+      });
+    }
+  });
+
+  /**
+   * POST /api/powermill/apply-params
+   * 把推荐的加工参数一键应用到当前 PowerMill 项目
+   * Body: { params: { tool, feedrate, spindle, plunge, strategy, ... } }
+   */
+  fastify.post('/api/powermill/apply-params', async (request, reply) => {
+    try {
+      const body = request.body as { params?: Record<string, unknown> };
+      if (!body?.params) {
+        return reply.status(400).send({ success: false, error: '必须提供 params 字段' });
+      }
+
+      const result = await powerMillService.applyParams(body.params);
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(500).send({
+        success: false,
+        error: `应用加工参数失败: ${(err as Error).message}`,
       });
     }
   });

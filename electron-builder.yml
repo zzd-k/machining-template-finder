@@ -24,6 +24,7 @@ files:
   - server/package.json
   - electron/**
   - package.json
+  - .env
 
 # 额外资源：把 PowerMill PowerShell 脚本额外暴露到 resources/scripts/
 # （后端运行时使用的是 server/dist/scripts/powermill.ps1；

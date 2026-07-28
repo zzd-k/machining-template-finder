@@ -21,9 +21,10 @@ export interface AppConfig {
 }
 
 const DEFAULT_CONFIG: AppConfig = {
-  siliconflowApiKey: 'sk-texuxcwmtttsqhrtljmvvohgqgxqitqusatvzgyehzdfjzqv',
-  siliconflowBaseUrl: 'https://api.siliconflow.cn/v1',
-  embeddingModel: 'Qwen/Qwen3-VL-Embedding-8B',
+  // 默认 key 从构建/运行时的环境变量读取，避免把真实密钥硬编码进源码
+  siliconflowApiKey: process.env.MTF_SILICONFLOW_API_KEY || '',
+  siliconflowBaseUrl: process.env.MTF_SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1',
+  embeddingModel: process.env.MTF_EMBEDDING_MODEL || 'Qwen/Qwen3-VL-Embedding-8B',
 };
 
 let cachedConfig: AppConfig | null = null;

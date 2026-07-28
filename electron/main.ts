@@ -21,6 +21,20 @@ import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import type { ChildProcess } from 'node:child_process'
 
+// ---------- 调试日志（打包后 console 不可见，写入文件诊断启动问题）----------
+// 使用 userData 目录确保打包后可写；避免在 app ready 前读取 home 路径在某些 Electron 版本下异常
+const DEBUG_LOG = path.join(app.getPath('userData'), 'mtf-debug.log')
+try { fs.writeFileSync(DEBUG_LOG, '') } catch {}
+function dlog(msg: string): void {
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  try { fs.appendFileSync(DEBUG_LOG, line) } catch {}
+}
+dlog('=== main.ts 模块加载 ===')
+dlog(`execPath=${process.execPath}`)
+dlog(`platform=${process.platform} arch=${process.arch}`)
+dlog(`isPackaged=${app.isPackaged}`)
+dlog(`appPath=${app.getAppPath()}`)
+
 // ---------- 常量 ----------
 const BACKEND_PORT = 3100
 const DEV_SERVER_URL = 'http://localhost:3200'
@@ -76,6 +90,8 @@ border-top-color:#1565c0;border-radius:50%;animation:sp 1s linear infinite;margi
 function startBackend(): boolean {
   const serverJs = getBackendJsPath()
   const userData = app.getPath('userData')
+  dlog(`startBackend: serverJs=${serverJs} exists=${fs.existsSync(serverJs)}`)
+  dlog(`startBackend: userData=${userData}`)
 
   if (!fs.existsSync(serverJs)) {
     dialog.showErrorBox(
@@ -85,6 +101,19 @@ function startBackend(): boolean {
     return false
   }
 
+  // 确保数据库目录存在
+  const dbDir = path.join(userData, 'data')
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true })
+    dlog(`创建数据库目录: ${dbDir}`)
+  }
+  // 确保上传目录存在
+  const uploadDir = path.join(userData, 'uploads')
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true })
+    dlog(`创建上传目录: ${uploadDir}`)
+  }
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // 用 Electron 自带 Node 运行后端脚本
@@ -92,33 +121,49 @@ function startBackend(): boolean {
     // 后端监听端口（与 Vite 代理目标一致）
     MTF_PORT: String(BACKEND_PORT),
     // 数据库 & 上传目录重定向到 userData（用户独立、可写）
-    MTF_DB_PATH: path.join(userData, 'data', 'templates.db'),
-    MTF_UPLOAD_DIR: path.join(userData, 'uploads'),
-    MTF_CONFIG_PATH: path.join(userData, 'data', 'config.json'),
+    MTF_DB_PATH: path.join(dbDir, 'templates.db'),
+    MTF_UPLOAD_DIR: uploadDir,
+    MTF_CONFIG_PATH: path.join(dbDir, 'config.json'),
+    // 把 API 配置透传给后端（开发时来自 .env，打包后也可由 .env 或用户配置覆盖）
+    MTF_SILICONFLOW_API_KEY: process.env.MTF_SILICONFLOW_API_KEY || '',
+    MTF_SILICONFLOW_BASE_URL: process.env.MTF_SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1',
+    MTF_EMBEDDING_MODEL: process.env.MTF_EMBEDDING_MODEL || 'Qwen/Qwen3-VL-Embedding-8B',
   }
 
   console.log('[electron] 启动后端：', serverJs)
+  let stderrBuffer = ''
+  // cwd 设为 Electron 可执行文件所在目录，避免 ELECTRON_RUN_AS_NODE=1 时找不到 icudtl.dat 等资源文件
+  const backendCwd = path.dirname(process.execPath)
+  dlog(`后端 cwd=${backendCwd}`)
   backendProcess = spawn(process.execPath, [serverJs], {
     env,
-    cwd: path.join(app.getAppPath(), 'server'),
+    cwd: backendCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
+  dlog(`后端进程已 spawn, pid=${backendProcess.pid}`)
 
   backendProcess.stdout?.on('data', (chunk: Buffer) => {
     process.stdout.write(`[backend] ${chunk}`)
   })
   backendProcess.stderr?.on('data', (chunk: Buffer) => {
-    process.stderr.write(`[backend] ${chunk}`)
+    const text = chunk.toString()
+    process.stderr.write(`[backend] ${text}`)
+    stderrBuffer += text
   })
 
   backendProcess.on('exit', (code, signal) => {
     console.log(`[electron] 后端退出 code=${code} signal=${signal}`)
+    dlog(`后端进程退出 code=${code} signal=${signal}`)
+    dlog(`后端 stderr: ${stderrBuffer.trim().substring(0, 500)}`)
     backendProcess = null
     if (!backendReady && !(app as any).isQuitting) {
       dialog.showErrorBox(
         '后端启动失败',
-        `后端进程异常退出（code=${code}）。\n请查看控制台日志排查原因。`,
+        `后端进程异常退出（code=${code}）。
+
+错误输出:
+${stderrBuffer.trim().substring(0, 1000) || '(无 stderr 输出)'}`,
       )
     }
   })
@@ -283,8 +328,10 @@ async function loadMainWindow(): Promise<void> {
 
 // ---------- 单实例锁（避免重复启动导致后端端口冲突）----------
 const gotLock = app.requestSingleInstanceLock()
+dlog(`requestSingleInstanceLock=${gotLock}`)
 
 if (!gotLock) {
+  dlog('未获取到单实例锁，退出')
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -296,33 +343,57 @@ if (!gotLock) {
 
   // ---------- 应用入口 ----------
   app.whenReady().then(async () => {
+    dlog('app.whenReady 触发')
+
     // 仅打包模式需要 app:// 协议
     if (!isDev) {
       const clientDist = getClientDistPath()
-      if (!fs.existsSync(path.join(clientDist, 'index.html'))) {
+      const indexPath = path.join(clientDist, 'index.html')
+      dlog(`检查前端入口: ${indexPath} exists=${fs.existsSync(indexPath)}`)
+      if (!fs.existsSync(indexPath)) {
         dialog.showErrorBox(
           '前端未构建',
-          `找不到前端入口：\n${path.join(clientDist, 'index.html')}\n\n请先运行：npm run build:client`,
+          `找不到前端入口：\n${indexPath}\n\n请先运行：npm run build:client`,
         )
       }
-      registerAppProtocol()
+      try {
+        registerAppProtocol()
+        dlog('registerAppProtocol 完成')
+      } catch (err) {
+        dlog(`registerAppProtocol 异常: ${(err as Error).stack}`)
+      }
     }
 
     // 启动后端
+    dlog('准备启动后端')
     if (!startBackend()) {
+      dlog('startBackend 返回 false，退出')
       app.quit()
       return
     }
+    dlog('startBackend 返回 true')
 
     // 创建窗口并先显示启动页
-    createWindow()
+    try {
+      createWindow()
+      dlog('createWindow 完成')
+    } catch (err) {
+      dlog(`createWindow 异常: ${(err as Error).stack}`)
+    }
     if (mainWindow) {
-      await mainWindow.loadURL(LOADING_HTML)
+      try {
+        await mainWindow.loadURL(LOADING_HTML)
+        dlog('loading 页加载完成')
+      } catch (err) {
+        dlog(`loading 页加载异常: ${(err as Error).message}`)
+      }
     }
 
     // 等待后端就绪
+    dlog(`开始等待后端: ${BACKEND_HEALTH_URL}`)
     const backendOk = await waitForUrl(BACKEND_HEALTH_URL, 30000)
     backendReady = backendOk
+    dlog(`后端就绪=${backendOk}`)
     if (!backendOk) {
       dialog.showErrorBox(
         '后端启动超时',
@@ -343,10 +414,22 @@ if (!gotLock) {
       }
     }
 
-    await loadMainWindow()
+    try {
+      await loadMainWindow()
+      dlog('loadMainWindow 完成')
+    } catch (err) {
+      dlog(`loadMainWindow 异常: ${(err as Error).stack}`)
+      dialog.showErrorBox(
+        '主界面加载失败',
+        `无法加载应用主界面：${(err as Error).message}\n\n详细日志：${DEBUG_LOG}`,
+      )
+      app.quit()
+      return
+    }
   })
 
   app.on('window-all-closed', () => {
+    dlog('window-all-closed 触发')
     // macOS 上习惯保留进程，其余平台直接退出
     if (process.platform !== 'darwin') {
       app.quit()
@@ -367,5 +450,6 @@ if (!gotLock) {
 
   process.on('uncaughtException', (err) => {
     console.error('[electron] uncaughtException:', err)
+    dlog(`uncaughtException: ${err.stack || err.message}`)
   })
 }

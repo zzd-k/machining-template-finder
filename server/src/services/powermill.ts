@@ -68,6 +68,7 @@ export interface PMScreenshotResult {
   path: string;
   size: number;
   modified: string;
+  view?: string;
   error?: string;
 }
 
@@ -94,7 +95,7 @@ interface PMRawResult {
  */
 function runPowerShellScript(
   action: string,
-  options: { command?: string; outputPath?: string } = {},
+  options: { command?: string; outputPath?: string; view?: string } = {},
   timeout = 30000
 ): Promise<PMRawResult> {
   return new Promise((resolve, reject) => {
@@ -110,6 +111,9 @@ function runPowerShellScript(
     }
     if (options.outputPath) {
       args.push('-OutputPath', options.outputPath);
+    }
+    if (options.view) {
+      args.push('-View', options.view);
     }
 
     execFile(
@@ -174,6 +178,8 @@ function runPowerShellScript(
  */
 class PowerMillService extends EventEmitter {
   private lastStatus: PMStatus | null = null;
+  private lastStatusTime: number = 0;  // Date.now() of last successful status
+  private autoPollTimer: NodeJS.Timeout | null = null;
   private pollingTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
 
@@ -214,6 +220,8 @@ class PowerMillService extends EventEmitter {
       timestamp: (result.timestamp as string) || new Date().toISOString(),
     };
 
+    this.lastStatus = status;
+    this.lastStatusTime = Date.now();
     return status;
   }
 
@@ -257,14 +265,18 @@ class PowerMillService extends EventEmitter {
   /**
    * 导出当前视图截图
    * @param outputPath 截图保存路径（如 /uploads/screenshots/xxx.png）
+   * @param view 可选视角命令：iso/front/top/left/right/back/bottom
    */
-  async takeScreenshot(outputPath: string): Promise<PMScreenshotResult> {
-    const result = await runPowerShellScript('screenshot', { outputPath }, 60000);
+  async takeScreenshot(outputPath: string, view?: string): Promise<PMScreenshotResult> {
+    const scriptParams: { outputPath: string; view?: string } = { outputPath };
+    if (view) scriptParams.view = view;
+    const result = await runPowerShellScript('screenshot', scriptParams, 60000);
     return {
       success: result.success,
       path: (result.path as string) || '',
       size: (result.size as number) || 0,
       modified: (result.modified as string) || '',
+      view: (result.view as string) || '',
       error: result.error,
     };
   }
@@ -281,6 +293,46 @@ class PowerMillService extends EventEmitter {
       command,
       error: result.error,
     };
+  }
+
+  /**
+   * 把推荐的加工参数应用到当前 PowerMill 项目。
+   * 目前实现：激活推荐刀具（若不存在则尝试创建端铣刀），并在 PowerMill 信息栏提示参数。
+   * 不同版本宏语法可能略有差异，前端可看到每条命令的执行结果。
+   */
+  async applyParams(params: Record<string, unknown>): Promise<{ success: boolean; results: PMExecuteResult[]; error?: string }> {
+    const tool = params.tool as string | undefined;
+    const feedrate = params.feedrate as number | undefined;
+    const spindle = params.spindle as number | undefined;
+    const strategy = params.strategy as string | undefined;
+
+    if (!tool) {
+      return { success: false, results: [], error: '缺少 tool 字段，无法应用加工参数' };
+    }
+
+    const results: PMExecuteResult[] = [];
+
+    // 1. 尝试激活已有刀具
+    const activateResult = await this.executeCommand(`ACTIVATE TOOL '${tool}'`);
+    results.push(activateResult);
+
+    // 2. 若激活失败（刀具不存在），尝试创建一把端铣刀并命名
+    if (!activateResult.success) {
+      results.push(await this.executeCommand(`CREATE TOOL END_MILL`));
+      results.push(await this.executeCommand(`RENAME TOOL '${tool}'`));
+      results.push(await this.executeCommand(`ACTIVATE TOOL '${tool}'`));
+    }
+
+    // 3. 在 PowerMill 信息栏输出推荐参数提示
+    const hints: string[] = [];
+    if (strategy) hints.push(`策略:${strategy}`);
+    if (feedrate !== undefined) hints.push(`进给:${feedrate}`);
+    if (spindle !== undefined) hints.push(`转速:${spindle}`);
+    if (hints.length > 0) {
+      results.push(await this.executeCommand(`PRINT MESSAGE '${hints.join(' ')}'`));
+    }
+
+    return { success: results.every((r) => r.success), results };
   }
 
   // ---------- 项目变化轮询 ----------
@@ -379,6 +431,51 @@ class PowerMillService extends EventEmitter {
     }
   }
 
+  /**
+   * Get cached status if fresh enough (within maxAge ms).
+   * Returns null if cache is empty or stale.
+   */
+  getCachedStatus(maxAgeMs: number = 30000): PMStatus | null {
+    if (this.lastStatus && (Date.now() - this.lastStatusTime) < maxAgeMs) {
+      return this.lastStatus;
+    }
+    return null;
+  }
+
+  /**
+   * Get cached status regardless of age (may be null if never fetched)
+   */
+  getCachedStatusAny(): PMStatus | null {
+    return this.lastStatus;
+  }
+
+  /**
+   * Start automatic background polling.
+   * Called once on server startup to keep status cache warm.
+   * Errors are caught and logged - never crash the server.
+   */
+  startAutoPolling(intervalMs: number = 15000): void {
+    if (this.autoPollTimer) return;
+    console.log('[PowerMill] Starting auto-polling (interval=' + intervalMs + 'ms)');
+    // Do an initial poll immediately
+    this.poll().catch(() => {});
+    this.autoPollTimer = setInterval(() => {
+      this.poll().catch((err) => {
+        console.error('[PowerMill] Auto-poll error:', err.message);
+      });
+    }, intervalMs);
+  }
+
+  /**
+   * Stop auto-polling
+   */
+  stopAutoPolling(): void {
+    if (this.autoPollTimer) {
+      clearInterval(this.autoPollTimer);
+      this.autoPollTimer = null;
+      console.log('[PowerMill] Auto-polling stopped');
+    }
+  }
   /**
    * 获取上次轮询的状态（不触发新的 COM 调用）
    */

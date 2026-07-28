@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import fs from 'fs';
 import multipart from '@fastify/multipart';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +17,7 @@ dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 const { configRoutes } = await import('./routes/config.js');
 const { searchRoutes } = await import('./routes/search.js');
 const { powermillRoutes } = await import('./routes/powermill.js');
+const { default: powerMillService } = await import('./services/powermill.js');
 
 const PORT = parseInt(process.env.MTF_PORT || '3100', 10);
 const UPLOAD_DIR = process.env.MTF_UPLOAD_DIR || './uploads';
@@ -31,8 +33,16 @@ await app.register(multipart, {
 });
 
 // Static files for uploaded images
+// 注意：UPLOAD_DIR 可能是绝对路径（打包后由 Electron 注入 userData 路径），
+// path.join 会把绝对路径当字符串拼接产生无效路径，必须用 path.isAbsolute 判断
+const UPLOAD_ROOT = path.isAbsolute(UPLOAD_DIR)
+  ? UPLOAD_DIR
+  : path.join(__dirname, '..', '..', UPLOAD_DIR);
+if (!fs.existsSync(UPLOAD_ROOT)) {
+  fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
+}
 await app.register(fastifyStatic, {
-  root: path.join(__dirname, '..', '..', UPLOAD_DIR),
+  root: UPLOAD_ROOT,
   prefix: '/uploads/',
 });
 
@@ -48,6 +58,9 @@ app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOS
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });
   console.log(`Server running on http://localhost:${PORT}`);
+
+  // Start background auto-polling (every 15s) to keep status cache warm
+  powerMillService.startAutoPolling(15000);
 } catch (err) {
   app.log.error(err);
   process.exit(1);

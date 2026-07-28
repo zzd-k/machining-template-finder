@@ -1,4 +1,4 @@
-﻿import { FastifyInstance } from 'fastify';
+import { FastifyInstance } from 'fastify';
 import db from '../db/database.js';
 import { getImageEmbedding, cosineSimilarity } from '../services/embedding.js';
 import fs from 'fs';
@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { pipeline } from 'stream/promises';
 import { randomUUID } from 'crypto';
+import { exec } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -163,6 +164,80 @@ export async function searchRoutes(fastify: FastifyInstance) {
   fastify.get('/api/drawings', async (_request, reply) => {
     const rows = db.prepare('SELECT id, filename, description, material, created_at FROM drawings ORDER BY created_at DESC').all();
     return reply.send({ drawings: rows });
+  });
+
+  /**
+   * POST /api/drawings/from-screenshot
+   * 将已截取的 PowerMill 截图保存到图库
+   * Body: { filename: string, description?: string, material?: string }
+   */
+  fastify.post<{ Body: { filename?: string; description?: string; material?: string } }>('/api/drawings/from-screenshot', async (request, reply) => {
+    const { filename, description = '', material = '' } = request.body || {};
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return reply.status(400).send({ success: false, error: 'Invalid filename' });
+    }
+    const screenshotPath = path.join(UPLOAD_DIR, 'screenshots', filename);
+    if (!fs.existsSync(screenshotPath)) {
+      return reply.status(404).send({ success: false, error: 'Screenshot not found' });
+    }
+
+    const fileId = randomUUID();
+    const savedFilename = `${fileId}.png`;
+    const savedPath = path.join(drawingsDir, savedFilename);
+    fs.copyFileSync(screenshotPath, savedPath);
+
+    let embedding: number[] | null = null;
+    try {
+      embedding = await getImageEmbedding({ filePath: savedPath });
+    } catch (err) {
+      console.error('Embedding extraction failed:', err);
+    }
+
+    const embeddingBuffer = embedding
+      ? Buffer.from(new Float32Array(embedding).buffer)
+      : null;
+
+    const result = db.prepare(`
+      INSERT INTO drawings (filename, original_path, description, material, machining_params, embedding, embedding_dim)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      filename,
+      savedPath,
+      description,
+      material,
+      '{}',
+      embeddingBuffer,
+      embedding?.length || null
+    );
+
+    return reply.send({
+      success: true,
+      id: result.lastInsertRowid,
+      filename,
+      hasEmbedding: !!embedding,
+    });
+  });
+
+  /**
+   * POST /api/drawings/folder
+   * 打开图库所在文件夹
+   */
+  fastify.post('/api/drawings/folder', async (_request, reply) => {
+    try {
+      if (!fs.existsSync(UPLOAD_DIR)) {
+        fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      }
+      if (process.platform === 'win32') {
+        exec(`explorer "${UPLOAD_DIR}"`);
+      } else if (process.platform === 'darwin') {
+        exec(`open "${UPLOAD_DIR}"`);
+      } else {
+        exec(`xdg-open "${UPLOAD_DIR}"`);
+      }
+      return reply.send({ success: true, path: UPLOAD_DIR });
+    } catch (err) {
+      return reply.status(500).send({ success: false, error: String(err) });
+    }
   });
 
   /**
