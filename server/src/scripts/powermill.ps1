@@ -372,19 +372,21 @@ public static extern bool SetProcessDPIAware();
             Start-Sleep -Milliseconds 600
 
             # 如有指定视角，通过 PowerMill 宏命令切换视图
-            # PowerMill 2027 使用 ROTATE TRANSFORM 系列命令切换标准视图
+            # 同时兼容新版（2027+）和老版命令：ROTATE TRANSFORM 和 FORM PICTURE
             $viewMap = @{
-                'iso'     = 'ROTATE TRANSFORM ISO1'
-                'front'   = 'ROTATE TRANSFORM FRONT'
-                'top'     = 'ROTATE TRANSFORM TOP'
-                'left'    = 'ROTATE TRANSFORM LEFT'
-                'right'   = 'ROTATE TRANSFORM RIGHT'
-                'back'    = 'ROTATE TRANSFORM BACK'
-                'bottom'  = 'ROTATE TRANSFORM BOTTOM'
+                'iso'     = @('ROTATE TRANSFORM ISO1', 'FORM PICTURE ISO')
+                'front'   = @('ROTATE TRANSFORM FRONT', 'FORM PICTURE FRONT')
+                'top'     = @('ROTATE TRANSFORM TOP', 'FORM PICTURE TOP')
+                'left'    = @('ROTATE TRANSFORM LEFT', 'FORM PICTURE LEFT')
+                'right'   = @('ROTATE TRANSFORM RIGHT', 'FORM PICTURE RIGHT')
+                'back'    = @('ROTATE TRANSFORM BACK', 'FORM PICTURE BACK')
+                'bottom'  = @('ROTATE TRANSFORM BOTTOM', 'FORM PICTURE BOTTOM')
             }
             if ($View -and $viewMap.ContainsKey($View.ToLower())) {
                 try {
-                    Invoke-PMMacro $pm $viewMap[$View.ToLower()]
+                    foreach ($cmd in $viewMap[$View.ToLower()]) {
+                        Invoke-PMMacro $pm $cmd
+                    }
                     Start-Sleep -Milliseconds 1200
                 } catch {}
             }
@@ -806,34 +808,38 @@ public class PMWindowCapture {
                 # 2027 中通过宏命令逐个隐藏/恢复刀具会弹窗或报错，
                 # 改为直接操作 COM 对象的 Drawn 属性（如果支持）。
                 $hiddenTools = @()
+                $toolDrawnByCom = $false
                 try {
                     foreach ($t in $pm.Project.Tools) {
                         try {
                             $n = Get-PMProperty $t 'Name' ''
                             if (-not $n) { continue }
-                            Write-Host "DEBUG tool name=$n type=$($t.GetType().Name)"
-                            # 尝试多个可能控制刀具显示的属性
+                            # 尝试多个可能控制刀具显示的 COM 属性
                             $hidden = $false
                             foreach ($prop in @('Drawn','Visible','Displayed','Shaded')) {
                                 try {
                                     $val = $t.$prop
-                                    Write-Host "DEBUG   property $prop = $val (type=$($val.GetType().Name))"
                                     if ($val -is [bool] -and $val) {
                                         $t.$prop = $false
                                         $hidden = $true
+                                        $toolDrawnByCom = $true
                                     }
-                                } catch {
-                                    Write-Host "DEBUG   property $prop error: $($_.Exception.Message)"
-                                }
+                                } catch {}
                             }
                             if ($hidden) { $hiddenTools += $n }
-                        } catch {
-                            Write-Host "DEBUG tool hide error: $($_.Exception.Message)"
-                        }
+                        } catch {}
                     }
-                    Write-Host "DEBUG hidden tools count=$($hiddenTools.Count)"
                     Start-Sleep -Milliseconds 400
                 } catch {}
+
+                # 如果 COM 属性方式没生效（老版本或 2027 不支持），尝试宏命令
+                if (-not $toolDrawnByCom) {
+                    try {
+                        # 老版本通常支持 UNDRAW TOOL ALL 且不弹窗
+                        Invoke-PMMacro $pm 'UNDRAW TOOL ALL'
+                        Start-Sleep -Milliseconds 400
+                    } catch {}
+                }
 
                 # 调整视图使模型完整充满视口：PowerMill 2027 中 F6 为"适应窗口"快捷键。
                 # 主窗口已在最前，这里把键盘焦点切到真正的 3D 视口子窗口，
